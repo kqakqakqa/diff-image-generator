@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="zh">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>双背景抠图工具</title>
+</head>
+
+<body>
+  <h2>双背景抠图工具</h2>
+
+  <div class="row">
+    <div class="imgInputWrapper card">
+      <b>图像1</b>
+      <label>
+        <input type="file" id="file1" accept="image/*" />
+        <canvas id="c1Canvas"></canvas>
+      </label>
+      <label>背景颜色：<input type="color" id="bg1" value="#ffffff" /></label>
+    </div>
+
+    <div class="imgInputWrapper card">
+      <b>图像2</b>
+      <label>
+        <canvas id="c2Canvas"></canvas>
+        <input type="file" id="file2" accept="image/*" />
+      </label>
+      <label>背景颜色：<input type="color" id="bg2" value="#000000" /></label>
+    </div>
+  </div>
+
+  <button id="run">开始合成</button>
+
+  <div id="outputs" class="card">
+    <div>
+      <div>结果图像</div>
+      <canvas id="outCanvas"></canvas>
+    </div>
+    <div>
+      <div>Alpha通道</div>
+      <canvas id="alphaCanvas"></canvas>
+    </div>
+  </div>
+
+  <button id="download" class="display-none">下载图像</button>
+</body>
+
+<style>
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1rem;
+    margin: 1rem;
+  }
+
+  .row {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .card {
+    padding: 1rem;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    box-shadow: 0px 3px 9px #88888833;
+  }
+
+  .imgInputWrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+
+  canvas {
+    border: 1px solid #ddd;
+    max-width: 20rem;
+    max-height: 20rem;
+    background: repeating-conic-gradient(#ccc 0 25%, #fff 0 50%) 50% / 1rem 1rem;
+  }
+
+  #c1Canvas,
+  #c2Canvas {
+    cursor: pointer;
+  }
+
+  button {
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid #ccc;
+    background: #fafafa;
+    cursor: pointer;
+    box-shadow: 0px 3px 9px #88888833;
+  }
+
+  button:hover {
+    background: #eee;
+  }
+
+  .display-none {
+    display: none;
+  }
+
+  #outputs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+  }
+
+  input[type="file"] {
+    display: none;
+  }
+</style>
+
+<script>
+  function hexToRgb(hex) {
+    hex = hex.replace('#', '');
+    if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
+    return [
+      parseInt(hex.slice(0, 2), 16),
+      parseInt(hex.slice(2, 4), 16),
+      parseInt(hex.slice(4, 6), 16),
+    ];
+  }
+
+  function loadImage(file) {
+    return new Promise((res, rej) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => { URL.revokeObjectURL(url); res(img) };
+      img.onerror = e => rej(e);
+      img.src = url;
+    });
+  }
+
+  function drawWithBg(canvas, img, bgColor) {
+    const ctx = canvas.getContext('2d');
+    if (img) {
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+    }
+    ctx.fillStyle = bgColor;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    if (img) ctx.drawImage(img, 0, 0);
+  }
+
+  function runInWorker(func, ...args) {
+    const workerCode = `const func = ${func.toString()}; self.onmessage = e => { const args = e.data; self.postMessage(func(...args)); };`;
+    const blob = new Blob([workerCode], { type: "application/javascript" });
+    const worker = new Worker(URL.createObjectURL(blob));
+
+    return new Promise((resolve, reject) => {
+      worker.onmessage = e => {
+        resolve(e.data);
+        worker.terminate();
+      };
+      worker.onerror = err => {
+        reject(err);
+        worker.terminate();
+      };
+      worker.postMessage(args);
+    });
+  }
+
+  function unmerge(data1, data2, rgbBg1, rgbBg2) {
+    function pUnmerge(pRgb1, pRgb2, rgbBg1, rgbBg2) {
+      const p1 = pRgb1.map(v => v / 255);
+      const p2 = pRgb2.map(v => v / 255);
+      const bg1 = rgbBg1.map(v => v / 255);
+      const bg2 = rgbBg2.map(v => v / 255);
+      const dBg = [bg2[0] - bg1[0], bg2[1] - bg1[1], bg2[2] - bg1[2]];
+      const dP = [p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]];
+      const denom = dBg[0] ** 2 + dBg[1] ** 2 + dBg[2] ** 2;
+      let oneMinusA = denom < 1e-9 ? 0 : (dP[0] * dBg[0] + dP[1] * dBg[1] + dP[2] * dBg[2]) / denom;
+      oneMinusA = Math.min(1, Math.max(0, oneMinusA));
+      const a = 1 - oneMinusA;
+      if (a < 1e-6) return [0, 0, 0, 0];
+
+      return [
+        Math.round((p1[0] - oneMinusA * bg1[0]) / a * 255),
+        Math.round((p1[1] - oneMinusA * bg1[1]) / a * 255),
+        Math.round((p1[2] - oneMinusA * bg1[2]) / a * 255),
+        Math.round(a * 255)
+      ];
+    }
+
+    const dataOut = new Uint8ClampedArray(data1.length);
+    const dataAlpha = new Uint8ClampedArray(data1.length);
+    for (let p = 0; p < data1.length; p += 4) {
+      let pRgb1 = [data1[p], data1[p + 1], data1[p + 2]];
+      let pRgb2 = [data2[p], data2[p + 1], data2[p + 2]];
+
+      [dataOut[p], dataOut[p + 1], dataOut[p + 2], dataOut[p + 3]] = pUnmerge(pRgb1, pRgb2, rgbBg1, rgbBg2);
+
+      dataAlpha[p] = dataAlpha[p + 1] = dataAlpha[p + 2] = dataOut[p + 3];
+      dataAlpha[p + 3] = 255;
+    }
+
+    return { dataOut, dataAlpha };
+  }
+
+  const canvas1 = document.getElementById('c1Canvas');
+  const canvas2 = document.getElementById('c2Canvas');
+
+  let img1 = null, img2 = null;
+
+  file1.onchange = async e => {
+    img1 = await loadImage(e.target.files[0]);
+    drawWithBg(canvas1, img1, bg1.value);
+  }
+  file2.onchange = async e => {
+    img2 = await loadImage(e.target.files[0]);
+    drawWithBg(canvas2, img2, bg2.value);
+  }
+
+  bg1.oninput = () => { drawWithBg(canvas1, img1, bg1.value); }
+  bg2.oninput = () => { drawWithBg(canvas2, img2, bg2.value); }
+  drawWithBg(canvas1, img1, bg1.value);
+  drawWithBg(canvas2, img2, bg2.value);
+
+  document.getElementById('run').onclick = () => main();
+
+  async function main() {
+    const w = canvas1.width, h = canvas1.height;
+    if (w !== canvas2.width || h !== canvas2.height) return window.alert("两张图片尺寸必须一致");
+
+    document.getElementById('run').disabled = true;
+
+    outCanvas.width = alphaCanvas.width = w;
+    outCanvas.height = alphaCanvas.height = h;
+
+    const data1 = canvas1.getContext('2d').getImageData(0, 0, w, h).data;
+    const data2 = canvas2.getContext('2d').getImageData(0, 0, w, h).data;
+    const rgbBg1 = hexToRgb(bg1.value);
+    const rgbBg2 = hexToRgb(bg2.value);
+
+    const imageDataOut = outCanvas.getContext('2d').createImageData(w, h);
+    const imageDataAlpha = alphaCanvas.getContext('2d').createImageData(w, h);
+
+    const { dataOut, dataAlpha } = await runInWorker(unmerge, data1, data2, rgbBg1, rgbBg2);
+
+    imageDataOut.data.set(dataOut);
+    imageDataAlpha.data.set(dataAlpha);
+
+    outCanvas.getContext('2d').putImageData(imageDataOut, 0, 0);
+    alphaCanvas.getContext('2d').putImageData(imageDataAlpha, 0, 0);
+
+    const dlBtn = document.getElementById('download');
+    dlBtn.classList.remove("display-none");
+    dlBtn.onclick = () => {
+      const a = document.createElement('a');
+      a.href = outCanvas.toDataURL('image/png');
+      a.download = 'result.png';
+      a.click();
+    }
+
+    window.alert("计算完成");
+    document.getElementById('run').disabled = false;
+  }
+</script>
+
+</html>
