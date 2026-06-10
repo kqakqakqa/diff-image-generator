@@ -4,11 +4,11 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>双背景抠图工具</title>
+  <title>差分图生成器</title>
 </head>
 
 <body>
-  <h2>双背景抠图工具</h2>
+  <h2>差分图生成器</h2>
 
   <div class="row">
     <div class="imgInputWrapper card">
@@ -226,9 +226,43 @@
   document.getElementById('run').onclick = () => main();
 
   async function main() {
+    const w1 = canvas1.width, h1 = canvas1.height;
+    const w2 = canvas2.width, h2 = canvas2.height;
+    
+    if (w1 !== w2 || h1 !== h2) {
+      window.alert("警告：两张图片尺寸不一致！\n图像1：" + w1 + "x" + h1 + "\n图像2：" + w2 + "x" + h2 + "\n\n将自动缩放较小的图像以匹配较大的尺寸，这可能导致图像拉伸变形。");
+      
+      // 找出较大的尺寸
+      const maxWidth = Math.max(w1, w2);
+      const maxHeight = Math.max(h1, h2);
+      
+      // 如果尺寸不一致，需要缩放较小的图像
+      if (w1 !== maxWidth || h1 !== maxHeight) {
+        // 缩放图像1
+        const tempCanvas1 = document.createElement('canvas');
+        tempCanvas1.width = maxWidth;
+        tempCanvas1.height = maxHeight;
+        const tempCtx1 = tempCanvas1.getContext('2d');
+        tempCtx1.drawImage(canvas1, 0, 0, w1, h1, 0, 0, maxWidth, maxHeight);
+        canvas1.width = maxWidth;
+        canvas1.height = maxHeight;
+        canvas1.getContext('2d').drawImage(tempCanvas1, 0, 0);
+      }
+      
+      if (w2 !== maxWidth || h2 !== maxHeight) {
+        // 缩放图像2
+        const tempCanvas2 = document.createElement('canvas');
+        tempCanvas2.width = maxWidth;
+        tempCanvas2.height = maxHeight;
+        const tempCtx2 = tempCanvas2.getContext('2d');
+        tempCtx2.drawImage(canvas2, 0, 0, w2, h2, 0, 0, maxWidth, maxHeight);
+        canvas2.width = maxWidth;
+        canvas2.height = maxHeight;
+        canvas2.getContext('2d').drawImage(tempCanvas2, 0, 0);
+      }
+    }
+    
     const w = canvas1.width, h = canvas1.height;
-    if (w !== canvas2.width || h !== canvas2.height) return window.alert("两张图片尺寸必须一致");
-
     document.getElementById('run').disabled = true;
 
     outCanvas.width = alphaCanvas.width = w;

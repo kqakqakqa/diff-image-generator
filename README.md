@@ -1,3 +1,3 @@
-# 2-color-matting
+# diff-image-generator
 
 ![preview](preview.webp)
